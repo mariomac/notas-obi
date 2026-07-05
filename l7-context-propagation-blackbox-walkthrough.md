@@ -202,10 +202,49 @@ exclusión mutua del flag `written`: el `sk_msg` lo pone a 1 al inyectar, y el k
 comprueba para no volver a inyectar/duplicar por la misma conexión (solo un método de
 inyección por conexión).
 
-Para que el `sk_msg` corra sobre ese socket, el socket tuvo que entrar en el sockhash
-`sock_dir` — vía `sockops` en connect (`bpf/tpinjector/tpinjector.c:394`,
-la llamada a `bpf_sock_hash_update`) o vía el iterador de arranque `sock_iter.c` para
-conexiones preexistentes.
+### ¿Cuándo y sobre qué sockets se ejecuta el `sk_msg`?
+
+Punto que engaña: el `sk_msg` **no se engancha a una cgroup ni a un hook global**, y **no
+corre para cada paquete del sistema**. Se attacha a un **mapa sockhash** (`sock_dir`,
+`BPF_MAP_TYPE_SOCKHASH`, `bpf/maps/sock_dir.h:17`) con verdict
+`BPF_SK_MSG_VERDICT`:
+
+- En Go, `SockMsgs()` devuelve el programa con `MapFD: SockDir.FD()` y
+  `AttachAs: AttachSkMsgVerdict` — `pkg/internal/ebpf/tpinjector/tpinjector.go:143`.
+- El attach real es `link.RawAttachProgram{Target: MapFD, ...}` —
+  `pkg/ebpf/instrumenter.go:709`.
+
+Semántica del kernel: un `sk_msg` con verdict corre **en cada `sendmsg()` de un socket, pero
+solo si ese socket es miembro del sockhash**. Si el socket no está en `sock_dir`, el programa
+no se ejecuta para él. Así que la pregunta real es **qué sockets entran en `sock_dir`**. Dos
+vías, ambas **independientes de si el proceso está instrumentado**:
+
+1. **El `sockops`** `obi_sockmap_tracker` (`bpf/tpinjector/tpinjector.c:509`),
+   que en `BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB` llama a `bpf_sock_hash_update(..., &sock_dir,
+   ...)` (`bpf/tpinjector/tpinjector.c:393`). **Solo la parte activa/saliente**
+   (el comentario en `bpf/tpinjector/tpinjector.c:507` lo dice explícito: *"We don't
+   track incoming"*).
+2. **El iterador `sock_iter`** (`ObiSkIterTcp`), que al arrancar siembra las conexiones **ya
+   existentes** (kernel ≥ 6.4) — `pkg/internal/ebpf/tpinjector/tpinjector.go:162`.
+
+Y el detalle clave: el `sockops` se engancha a la **raíz de la jerarquía cgroupv2**,
+`/sys/fs/cgroup` (`cgroupFSRoot` en `pkg/ebpf/cgroupv2.go:20`, usado por
+`AttachCgroupSockOps` en `pkg/ebpf/cgroupv2.go:77`). Es decir, **todo el host**, no una
+cgroup por proceso instrumentado.
+
+**Consecuencia:** el `sk_msg` no corre para *cada paquete*, pero sí para **cada `sendmsg` de
+cada conexión TCP saliente del host**, esté o no instrumentado ese proceso. No corre para:
+conexiones **entrantes/pasivas** (no se añaden al sockhash), sockets no-TCP, ni antes de que
+la conexión esté ESTABLISHED.
+
+**El filtrado a "procesos monitorizados por OBI" ocurre *dentro* del programa, no en el
+attach.** En `bpf/tpinjector/tpinjector.c:931`, `if (!valid_pid(id)) return SK_PASS;`
+descarta los PIDs no instrumentados (gobernado por la constante `filter_pids`,
+`bpf/pid/pid.h:41`; desactivable con `OTEL_EBPF_BPF_PID_FILTER_OFF`). Ojo: ese descarte
+ocurre **después** de dos lookups de mapa — `get_tp_info_pid`
+(`bpf/tpinjector/tpinjector.c:919`) e `is_go_grpc_client_conn`
+(`bpf/tpinjector/tpinjector.c:925`) — así que hay un pequeño coste por cada paquete saliente
+del host aunque el proceso no esté instrumentado.
 
 ---
 

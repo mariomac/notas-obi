@@ -88,3 +88,31 @@ decisiones de diseño, etc., a medida que los voy investigando.
 - Runtimes con tratamiento especial: **Go (uprobes)**, **Node.js (event loop)**,
   **Python asyncio**, **Java virtual threads**, **nginx / puma** (correlación
   por conexión).
+
+## Estado y contexto de trabajo (bitácora)
+
+> **Para agentes:** esta sección es el "contexto persistente" del trabajo. Léela
+> al empezar una sesión para saber por dónde vamos, y **actualízala al terminar**
+> algo relevante (nota nueva, decisión, hilo abierto). Sirve para retomar el
+> trabajo desde cualquier cliente de Claude, no solo Claude Code. Mantenla breve:
+> estado, no historial exhaustivo. Entrada más reciente arriba.
+
+### Instantánea actual
+
+- **Pin del submódulo `obi/`:** `c1ed7d9b` (2026-07-02) — todas las notas se
+  escriben contra este commit. Verificar símbolos citados si cambia.
+- **Notas existentes:**
+  - [l7-context-propagation-blackbox-walkthrough.md](l7-context-propagation-blackbox-walkthrough.md)
+    — ruta L7 black-box de propagación de contexto.
+- **Foco actual / hilos abiertos:** *(vacío — apuntar aquí el próximo tema en
+  investigación y las dudas pendientes)*
+
+### Bitácora
+
+- **2026-07-05** — Ampliado el walkthrough L7 (Paso 4) con el **alcance del
+  `sk_msg`**: se attacha al sockhash `sock_dir` (no a cgroup/hook global); los
+  sockets entran vía `sockops` en la **cgroup raíz** (solo salientes) + iterador
+  de arranque; corre para todo egress TCP del host; el filtrado por PID
+  monitorizado es *dentro* del programa (`valid_pid`).
+- **2026-07-05** — Se añade esta sección de bitácora para persistir contexto
+  entre sesiones y clientes.
